@@ -46,7 +46,6 @@ class BackyardFlyer(Drone):
         # initial state
         self.flight_state = States.MANUAL
 
-        # TODO: Register all your callbacks here
         self.register_callback(MsgID.LOCAL_POSITION, self.local_position_callback)
         self.register_callback(MsgID.LOCAL_VELOCITY, self.velocity_callback)
         self.register_callback(MsgID.STATE, self.state_callback)
@@ -208,7 +207,6 @@ if __name__ == "__main__":
     parser.add_argument('--plot', type=bool,help="Enable plotting to local visdom server")
     args = parser.parse_args()
 
-    test = [0.02, 0.02, 0.02, 0.015, 0.015, 0.015]
     conn = MavlinkConnection('tcp:{0}:{1}'.format(args.host, args.port), threaded=False, PX4=False)
     # conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
     drone = BackyardFlyer(conn, args.plot)
