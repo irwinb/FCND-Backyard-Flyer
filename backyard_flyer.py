@@ -17,44 +17,37 @@ class States(Enum):
     WAYPOINT = 3
     LANDING = 4
     DISARMING = 5
+    STABILIZE = 6
 
 
 class BackyardFlyer(Drone):
 
-    def __init__(self, connection):
+    def __init__(self, connection, plot):
         super().__init__(connection)
         self.target_position = np.array([0.0, 0.0, 0.0])
         self.all_waypoints = self.calculate_box()
         self.in_mission = True
         self.check_state = {}
-        self.current_waypoint_index = 0
 
         # prepare plotter
-        self.v = visdom.Visdom()
-        assert self.v.check_connection()
+        if plot:
+            self.v = visdom.Visdom()
+            assert self.v.check_connection()
 
-        ne = np.array(self.local_position[:2]).reshape(-1, 2)
-        self.ne_plot = self.v.scatter(ne, opts=dict(
-            title="Local position (north, east)",
-            xlabel='North',
-            ylabal='East'
-        ))
+            ne = np.array(self.local_position[:2]).reshape(-1, 2)
+            self.ne_plot = self.v.scatter(ne, opts=dict(
+                title="Local position (north, east)",
+                xlabel='North',
+                ylabal='East'
+            ))
 
-        d = np.array([self.local_position[2]])
-        self.plot_t = 1
-        self.d_plot = self.v.line(d, X=np.array([self.plot_t]), opts=dict(
-            title="Altitude (meters)",
-            xlabel='Timestamp',
-            ylabel='Down'
-        ))
+            self.register_callback(MsgID.LOCAL_POSITION, self.update_ne_plot)
 
         # initial state
         self.flight_state = States.MANUAL
 
         # TODO: Register all your callbacks here
         self.register_callback(MsgID.LOCAL_POSITION, self.local_position_callback)
-        self.register_callback(MsgID.LOCAL_POSITION, self.update_ne_plot)
-        self.register_callback(MsgID.LOCAL_POSITION, self.update_d_plot)
         self.register_callback(MsgID.LOCAL_VELOCITY, self.velocity_callback)
         self.register_callback(MsgID.STATE, self.state_callback)
 
@@ -62,31 +55,28 @@ class BackyardFlyer(Drone):
         ne = np.array(self.local_position[:2]).reshape(-1, 2)
         self.v.scatter(ne, win=self.ne_plot, update='append')
 
-    def update_d_plot(self):
-        d = np.array([self.local_position[2]])
-        self.plot_t += 1
-        self.v.line(d, X=np.array([self.plot_t]), win=self.d_plot, update='append')
-
     def local_position_callback(self):
         """
         This triggers when `MsgID.LOCAL_POSITION` is received and self.local_position contains new data
         """
         if self.flight_state == States.WAYPOINT:
             # Set the next waypoint when we are just about to reach our current waypoint
-            target = self.all_waypoints[self.current_waypoint_index]
-
-            if (abs(self.local_position[0] - target[0]) < 0.15 and
-                    abs(self.local_position[1] - target[1]) < 0.15):
-                if self.current_waypoint_index == 3:
-                    self.landing_transition()
-                else:
-                    self.move_to_waypoint(self.current_waypoint_index + 1)
+            if np.linalg.norm(self.target_position[0:2] - self.local_position[0:2]) < 0.35:
+                # We've reached destination, stabilize before going to next waypoint
+                self.stabilize_transition()
 
     def velocity_callback(self):
         """
         This triggers when `MsgID.LOCAL_VELOCITY` is received and self.local_velocity contains new data
         """
-        if self.flight_state == States.LANDING:
+        if self.flight_state == States.STABILIZE:
+            # TODO More experimentation to figure out if drone is stable
+            if np.all(self.local_velocity < .025):
+                if len(self.all_waypoints) == 0:
+                    self.landing_transition()
+                else:
+                    self.waypoint_transition()
+        elif self.flight_state == States.LANDING:
             if abs(self.global_position[2]) < 0.1:
                 self.disarming_transition()
 
@@ -115,14 +105,20 @@ class BackyardFlyer(Drone):
         home_x = self.global_home[0]
         home_y = self.global_home[1]
 
-        return np.array([
-            [home_x + 10.0, 0.0],
-            [home_x + 10.0, home_y + 10.0],
+        return [
+            [home_x, home_y],
             [0.0, home_y + 10.0],
-            [home_x, home_y]])
+            [home_x + 10.0, home_y + 10.0],
+            [home_x + 10.0, 0.0]
+        ]
 
     def arming_transition(self):
         print("arming transition")
+
+        # fix from https://github.com/udacity/fcnd-issue-reports/issues/96
+        if self.global_position[0] == 0.0 and self.global_position[1] == 0.0:
+            print("no global position data, wait")
+            return
 
         self.take_control()
         self.arm()
@@ -141,20 +137,19 @@ class BackyardFlyer(Drone):
 
         self.flight_state = States.TAKEOFF
 
+    def stabilize_transition(self):
+        print("stabilize transition")
+
+        self.flight_state = States.STABILIZE
+
     def waypoint_transition(self):
         """
         1. Command the next waypoint position
         2. Transition to WAYPOINT state
         """
-        print("waypoint transition")
+        new_target = self.all_waypoints.pop()
 
-        self.move_to_waypoint(0)
-
-        self.flight_state = States.WAYPOINT
-
-    def move_to_waypoint(self, waypoint_index):
-        self.current_waypoint_index = waypoint_index
-        new_target = self.all_waypoints[self.current_waypoint_index]
+        print("waypoint transition", new_target)
 
         self.target_position[0] = new_target[0]
         self.target_position[1] = new_target[1]
@@ -163,6 +158,8 @@ class BackyardFlyer(Drone):
                           self.target_position[1],
                           self.target_position[2],
                           0)
+
+        self.flight_state = States.WAYPOINT
 
     def landing_transition(self):
         print("landing transition")
@@ -208,10 +205,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5760, help='Port number')
     parser.add_argument('--host', type=str, default='127.0.0.1', help="host address, i.e. '127.0.0.1'")
+    parser.add_argument('--plot', type=bool,help="Enable plotting to local visdom server")
     args = parser.parse_args()
 
+    test = [0.02, 0.02, 0.02, 0.015, 0.015, 0.015]
     conn = MavlinkConnection('tcp:{0}:{1}'.format(args.host, args.port), threaded=False, PX4=False)
     # conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
-    drone = BackyardFlyer(conn)
+    drone = BackyardFlyer(conn, args.plot)
     time.sleep(2)
     drone.start()
