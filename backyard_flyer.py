@@ -172,7 +172,6 @@ class BackyardFlyer(Drone):
 
     def manual_transition(self):
         """This method is provided
-
         1. Release control of the drone
         2. Stop the connection (and telemetry log)
         3. End the mission
@@ -187,7 +186,6 @@ class BackyardFlyer(Drone):
 
     def start(self):
         """This method is provided
-
         1. Open a log file
         2. Start the drone connection
         3. Close the log file
@@ -204,7 +202,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=5760, help='Port number')
     parser.add_argument('--host', type=str, default='127.0.0.1', help="host address, i.e. '127.0.0.1'")
-    parser.add_argument('--plot', type=bool,help="Enable plotting to local visdom server")
+    parser.add_argument('--plot', type=bool, help="Enable plotting to local visdom server")
     args = parser.parse_args()
 
     conn = MavlinkConnection('tcp:{0}:{1}'.format(args.host, args.port), threaded=False, PX4=False)
